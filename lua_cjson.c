@@ -146,12 +146,13 @@ typedef struct {
     json_config_t *cfg;
     int current_depth;
     int user_callbacks;
+    int number_to_string;
 } json_parse_t;
 
 typedef struct {
     json_token_type_t type;
     int index;
-    union {
+    struct {
         const char *string;
         double number;
         int boolean;
@@ -1042,8 +1043,15 @@ static void json_next_number_token(json_parse_t *json, json_token_t *token)
     token->value.number = fpconv_strtod(json->ptr, &endptr);
     if (json->ptr == endptr)
         json_set_token_error(token, json, "invalid number");
-    else
+    else {
+        if (json->number_to_string) {
+            strbuf_reset(json->tmp);
+            strbuf_append_mem_unsafe(json->tmp, json->ptr, endptr - json->ptr);
+            strbuf_ensure_null(json->tmp);
+            token->value.string = strbuf_string(json->tmp, &token->string_len);
+        }
         json->ptr = endptr;     /* Skip the processed number */
+    }
 
     return;
 }
@@ -1394,7 +1402,11 @@ static void json_process_value(lua_State *l, json_parse_t *json,
         lua_pushlstring(l, token->value.string, token->string_len);
         break;;
     case T_NUMBER:
-        lua_pushnumber(l, token->value.number);
+        if (json->number_to_string) {
+            lua_pushlstring(l, token->value.string, token->string_len);
+        } else {
+            lua_pushnumber(l, token->value.number);
+        }
         break;;
     case T_BOOLEAN:
         lua_pushboolean(l, token->value.boolean);
@@ -1427,6 +1439,7 @@ static int json_decode(lua_State *l)
     }
 
     json.user_callbacks = 0;
+    json.number_to_string = 0;
 
     if (top == 2) {
         if (lua_istable(l, 2) == 0) {
@@ -1445,6 +1458,12 @@ static int json_decode(lua_State *l)
                               !lua_isnil(l, -2) &&
                               !lua_isnil(l, -1);
         lua_pop(l, 5);
+
+        lua_getfield(l, 2, "number_as_string");
+        if (lua_isboolean(l, -1)) {
+            json.number_to_string = lua_toboolean(l, -1);
+        }
+        lua_pop(l, 1);
     }
 
     json.cfg = json_fetch_config(l);

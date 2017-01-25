@@ -519,7 +519,13 @@ local cjson_tests = {
       true, { true } },
     { "User callback rfc-example2.json",
       check_callback, { "rfc-example2.json" },
-      true, { true } }
+      true, { true } },
+
+    -- Numbers as strings
+    { "Decode numbers as string 99999999999999999999",
+      json.decode, { '99999999999999999999', { number_as_string = true } }, true, { "99999999999999999999" } },
+    { "Decode numbers as string 999999999.9999999999",
+      json.decode, { '999999999.9999999999', { number_as_string = true } }, true, { "999999999.9999999999" } }
 }
 
 print(("==> Testing Lua CJSON version %s\n"):format(json._VERSION))
