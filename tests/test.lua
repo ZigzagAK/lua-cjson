@@ -402,6 +402,12 @@ local cjson_tests = {
     { "Decode (safe) error generation after new()",
       function(...) return json_safe.new().decode(...) end, { "Oops" },
       true, { nil, "Expected value but found invalid token at character 1" } },
+
+    -- Numbers as strings
+    { "Decode numbers as string 99999999999999999999",
+      json.decode, { '99999999999999999999', { number_as_string = true } }, true, { "99999999999999999999" } },
+    { "Decode numbers as string 999999999.9999999999",
+      json.decode, { '999999999.9999999999', { number_as_string = true } }, true, { "999999999.9999999999" } }
 }
 
 print(("==> Testing Lua CJSON version %s\n"):format(json._VERSION))
