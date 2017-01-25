@@ -145,12 +145,13 @@ typedef struct {
     strbuf_t *tmp;    /* Temporary storage for strings */
     json_config_t *cfg;
     int current_depth;
+    int number_to_string;
 } json_parse_t;
 
 typedef struct {
     json_token_type_t type;
     int index;
-    union {
+    struct {
         const char *string;
         double number;
         int boolean;
@@ -1041,8 +1042,15 @@ static void json_next_number_token(json_parse_t *json, json_token_t *token)
     token->value.number = fpconv_strtod(json->ptr, &endptr);
     if (json->ptr == endptr)
         json_set_token_error(token, json, "invalid number");
-    else
+    else {
+        if (json->number_to_string) {
+            strbuf_reset(json->tmp);
+            strbuf_append_mem_unsafe(json->tmp, json->ptr, endptr - json->ptr);
+            strbuf_ensure_null(json->tmp);
+            token->value.string = strbuf_string(json->tmp, &token->string_len);
+        }
         json->ptr = endptr;     /* Skip the processed number */
+    }
 
     return;
 }
@@ -1269,7 +1277,11 @@ static void json_process_value(lua_State *l, json_parse_t *json,
         lua_pushlstring(l, token->value.string, token->string_len);
         break;;
     case T_NUMBER:
-        lua_pushnumber(l, token->value.number);
+        if (json->number_to_string) {
+            lua_pushlstring(l, token->value.string, token->string_len);
+        } else {
+            lua_pushnumber(l, token->value.number);
+        }
         break;;
     case T_BOOLEAN:
         lua_pushboolean(l, token->value.boolean);
@@ -1295,8 +1307,24 @@ static int json_decode(lua_State *l)
     json_parse_t json;
     json_token_t token;
     size_t json_len;
+    size_t top = lua_gettop(l);
 
-    luaL_argcheck(l, lua_gettop(l) == 1, 1, "expected 1 argument");
+    if (top != 1 && top != 2) {
+        luaL_error(l, "expected 1 or 2 arguments");
+    }
+
+    if (top == 1) {
+        json.number_to_string = 0;
+    } else {
+        if (lua_istable(l, 2) == 0) {
+            luaL_error(l, "opts argument must be a table with additional options");
+        }
+        lua_getfield(l, 2, "number_as_string");
+        if (lua_isboolean(l, -1)) {
+            json.number_to_string = lua_toboolean(l, -1);
+        }
+        lua_pop(l, 1);
+    }
 
     json.cfg = json_fetch_config(l);
     json.data = luaL_checklstring(l, 1, &json_len);
@@ -1308,8 +1336,12 @@ static int json_decode(lua_State *l)
      * CJSON can support any simple data type, hence only the first
      * character is guaranteed to be ASCII (at worst: '"'). This is
      * still enough to detect whether the wrong encoding is in use. */
-    if (json_len >= 2 && (!json.data[0] || !json.data[1]))
+    if (json_len >= 2 && (!json.data[0] || !json.data[1])) {
+        if (top == 2) {
+            lua_settop(l, top);
+        }
         luaL_error(l, "JSON parser does not support UTF-16 or UTF-32");
+    }
 
     /* Ensure the temporary buffer can hold the entire string.
      * This means we no longer need to do length checks since the decoded
