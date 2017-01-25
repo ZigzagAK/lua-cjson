@@ -1313,9 +1313,9 @@ static int json_decode(lua_State *l)
         luaL_error(l, "expected 1 or 2 arguments");
     }
 
-    if (top == 1) {
-        json.number_to_string = 0;
-    } else {
+    json.number_to_string = 0;
+
+    if (top == 2) {
         if (lua_istable(l, 2) == 0) {
             luaL_error(l, "opts argument must be a table with additional options");
         }
