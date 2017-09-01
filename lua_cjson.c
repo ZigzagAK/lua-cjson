@@ -54,6 +54,16 @@
 #define CJSON_VERSION   "2.1devel"
 #endif
 
+#ifdef _MSC_VER
+#define snprintf sprintf_s
+
+#ifndef isnan
+#include <float.h>
+#define isnan(x) _isnan(x)
+#endif
+
+#endif
+
 /* Workaround for Solaris platforms missing isinf() */
 #if !defined(isinf) && (defined(USE_INTERNAL_ISINF) || defined(MISSING_ISINF))
 #define isinf(x) (!isnan(x) && isnan((x) - (x)))
@@ -482,7 +492,7 @@ static void json_encode_exception(lua_State *l, json_config_t *cfg, strbuf_t *js
 static void json_append_string(lua_State *l, strbuf_t *json, int lindex)
 {
     const char *escstr;
-    int i;
+    unsigned i;
     const char *str;
     size_t len;
 
@@ -1504,8 +1514,9 @@ static int json_decode(lua_State *l)
 
 /* ===== INITIALISATION ===== */
 
-#if !defined(LUA_VERSION_NUM) || LUA_VERSION_NUM < 502
-/* Compatibility for Lua 5.1.
+#if !defined(luaL_newlibtable) \
+    && (!defined(LUA_VERSION_NUM) || LUA_VERSION_NUM < 502)
+/* Compatibility for Lua 5.1 and older LuaJIT.
  *
  * luaL_setfuncs() is used to create a module table where the functions have
  * json_config_t as their first upvalue. Code borrowed from Lua 5.2 source. */
