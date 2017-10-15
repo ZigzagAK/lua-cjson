@@ -525,7 +525,25 @@ local cjson_tests = {
     { "Decode numbers as string 99999999999999999999",
       json.decode, { '99999999999999999999', { number_as_string = true } }, true, { "99999999999999999999" } },
     { "Decode numbers as string 999999999.9999999999",
-      json.decode, { '999999999.9999999999', { number_as_string = true } }, true, { "999999999.9999999999" } }
+      json.decode, { '999999999.9999999999', { number_as_string = true } }, true, { "999999999.9999999999" } },
+    { "Decode numbers as string 99999999999991",
+      json.decode, { '99999999999991', { number_as_string = true } }, true, { 99999999999991 } },
+    { "Decode numbers as string 999999999999992",
+      json.decode, { '999999999999992', { number_as_string = true } }, true, { "999999999999992" } },
+    { "Decode numbers as string 9999999999999.3",
+      json.decode, { '9999999999999.3', { number_as_string = true } }, true, { 9999999999999.3 } },
+    { "Decode numbers as string 9999999999999.94",
+      json.decode, { '9999999999999.94', { number_as_string = true } }, true, { "9999999999999.94" } },
+    { "Decode numbers as string 9999999999999994",
+      json.decode, { '9999999999999994', { number_as_string = true } }, true, { "9999999999999994" } },
+    { "Decode numbers as string 999999999999999.99994",
+      json.decode, { '999999999999999.99994', { number_as_string = true } }, true, { "999999999999999.99994" } },
+    { "Decode numbers as string 000009999999999999.3",
+      json.decode, { '000009999999999999.3', { number_as_string = true } }, true, { 9999999999999.3 } },
+    { "Decode numbers as string 000009999999999999.3",
+      json.decode, { '-000009999999999999.3', { number_as_string = true } }, true, { -9999999999999.3 } },
+    { "Decode numbers as string 000009999999999999.3",
+      json.decode, { '+000009999999999999.3', { number_as_string = true } }, true, { 9999999999999.3 } }
 }
 
 print(("==> Testing Lua CJSON version %s\n"):format(json._VERSION))
