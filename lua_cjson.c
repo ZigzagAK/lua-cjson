@@ -43,6 +43,9 @@
 #include <lua.h>
 #include <lauxlib.h>
 #include <errno.h>
+#include <stdint.h>
+#include <inttypes.h>
+#include <strings.h>
 
 #include "strbuf.h"
 #include "fpconv.h"
@@ -92,6 +95,13 @@
 #define strcasecmp _stricmp
 #endif
 
+#if !defined(luaL_newlibtable) \
+    && (!defined(LUA_VERSION_NUM) || LUA_VERSION_NUM < 502)
+static void* luaL_testudata(lua_State *l, int i, const char *tname);
+#endif
+
+#include "int64.h"
+
 static const char * const *json_empty_array;
 
 typedef enum {
@@ -101,6 +111,8 @@ typedef enum {
     T_ARR_END,
     T_STRING,
     T_NUMBER,
+    T_INT64,
+    T_UINT64,
     T_BOOLEAN,
     T_NULL,
     T_COLON,
@@ -118,6 +130,8 @@ static const char *json_token_type_name[] = {
     "T_ARR_END",
     "T_STRING",
     "T_NUMBER",
+    "T_INT64",
+    "T_UINT64",
     "T_BOOLEAN",
     "T_NULL",
     "T_COLON",
@@ -157,7 +171,6 @@ typedef struct {
     json_config_t *cfg;
     int current_depth;
     int user_callbacks;
-    int number_as_string;
 } json_parse_t;
 
 typedef struct {
@@ -167,6 +180,8 @@ typedef struct {
         const char *string;
         double number;
         int boolean;
+        int64_t ival;
+        uint64_t uval;
     } value;
     int string_len;
 } json_token_t;
@@ -653,6 +668,22 @@ static void json_append_number(lua_State *l, json_config_t *cfg,
     strbuf_extend_length(json, len);
 }
 
+static void json_append_int64(strbuf_t *json, int64_t v)
+{
+    char   buf[23];
+    size_t len = snprintf(buf, 22, "%" PRId64, v);
+    strbuf_ensure_empty_length(json, len);
+    strbuf_append_string(json, buf);
+}
+
+static void json_append_uint64(strbuf_t *json, uint64_t v)
+{
+    char   buf[23];
+    size_t len = snprintf(buf, 22, "%" PRIu64, v);
+    strbuf_ensure_empty_length(json, len);
+    strbuf_append_string(json, buf);
+}
+
 static void json_append_object(lua_State *l, json_config_t *cfg,
                                int current_depth, strbuf_t *json)
 {
@@ -679,6 +710,24 @@ static void json_append_object(lua_State *l, json_config_t *cfg,
         } else if (keytype == LUA_TSTRING) {
             json_append_string(l, json, -2);
             strbuf_append_char(json, ':');
+        } else if (keytype == LUA_TUSERDATA) {
+            void *ud = luaL_testudata(l, -2, "INT64");
+            if (ud) {
+                strbuf_append_char(json, '"');
+                json_append_int64(json, get_i64(ud));
+                strbuf_append_mem(json, "\":", 2);
+            } else {
+                ud = luaL_testudata(l, -2, "UINT64");
+                if (ud) {
+                    strbuf_append_char(json, '"');
+                    json_append_uint64(json, get_u64(ud));
+                    strbuf_append_mem(json, "\":", 2);
+                } else {
+                    json_encode_exception(l, cfg, json, -2,
+                                          "table key must be a number or string");
+                    /* never returns */
+                }
+            }
         } else {
             json_encode_exception(l, cfg, json, -2,
                                   "table key must be a number or string");
@@ -745,6 +794,18 @@ static void json_append_data(lua_State *l, json_config_t *cfg,
             json_append_array(l, cfg, current_depth, json, 0);
         }
         break;
+    case LUA_TUSERDATA: {
+            void *ud = luaL_testudata(l, -1, "INT64");
+            if (ud) {
+                json_append_int64(json, get_i64(ud));
+                break;
+            }
+            ud = luaL_testudata(l, -1, "UINT64");
+            if (ud) {
+                json_append_uint64(json, get_u64(ud));
+                break;
+            }
+        }
     default:
         /* Remaining types (LUA_TFUNCTION, LUA_TUSERDATA, LUA_TTHREAD,
          * and LUA_TLIGHTUSERDATA) cannot be serialised */
@@ -1048,38 +1109,43 @@ static int json_is_invalid_number(json_parse_t *json)
 
 static void json_next_number_token(json_parse_t *json, json_token_t *token)
 {
-    char *endptr, n = 0;
-    const char *ch;
+    char *endptr;
+    double value;
 
     token->type = T_NUMBER;
-    token->value.number = fpconv_strtod(json->ptr, &endptr);
+    value = fpconv_strtod(json->ptr, &endptr);
 
-    if (json->ptr == endptr)
+    if (json->ptr == endptr) {
         json_set_token_error(token, json, "invalid number");
-    else {
-        if (json->number_as_string) {
-            n = endptr - json->ptr;
-            if (n > 14) {
-                n = 0;
-                for (ch = json->ptr; ch < endptr && (*ch == '-' || *ch == '+' || *ch == '0'); ++ch);
-                for (; ch < endptr; ++ch) {
-                    if ('0' <= *ch && *ch <= '9') {
-                        ++n;
-                    }
+    } else {
+        if (value > 1e+14 - 1) {
+            token->value.ival = strtoll(json->ptr, NULL, 10);
+            if ((errno == ERANGE && (token->value.ival == LLONG_MAX || token->value.ival == 0))
+                       || (errno != 0 && token->value.ival == 0)) {
+                token->value.uval = strtoull(json->ptr, NULL, 10);
+                if ((errno == ERANGE && (token->value.uval == ULLONG_MAX || token->value.uval == 0))
+                           || (errno != 0 && token->value.uval == 0)) {
+                    token->value.number = value;
+                } else {
+                    token->type = T_UINT64;
                 }
-                if (n > 14) {
-                    token->type = T_STRING;
-                    strbuf_reset(json->tmp);
-                    strbuf_append_mem_unsafe(json->tmp, json->ptr, endptr - json->ptr);
-                    strbuf_ensure_null(json->tmp);
-                    token->value.string = strbuf_string(json->tmp, &token->string_len);
-                }
+            } else {
+                token->type = T_INT64;
             }
+        } else if (value < -1e+14 + 1) {
+            token->value.ival = strtoll(json->ptr, NULL, 10);
+            if ((errno == ERANGE && (token->value.ival + 1 == -LLONG_MAX || token->value.ival == 0))
+                       || (errno != 0 && token->value.ival == 0)) {
+                token->value.number = value;
+            } else {
+                token->type = T_INT64;
+            }
+        } else {
+            token->value.number = value;
         }
+
         json->ptr = endptr;     /* Skip the processed number */
     }
-
-    return;
 }
 
 /* Fills in the token struct.
@@ -1273,6 +1339,8 @@ static void json_parse_object_context(lua_State *l, json_parse_t *json)
                 lua_settop(l, saved_sp + 3);
                 if (token.type == T_STRING  ||
                     token.type == T_NUMBER  ||
+                    token.type == T_INT64   ||
+                    token.type == T_UINT64  ||
                     token.type == T_BOOLEAN ||
                     token.type == T_NULL) {
                     /* Call user code */
@@ -1375,6 +1443,8 @@ static void json_parse_array_context(lua_State *l, json_parse_t *json)
                 lua_settop(l, saved_sp + 3);
                 if (token.type == T_STRING  ||
                     token.type == T_NUMBER  ||
+                    token.type == T_INT64   ||
+                    token.type == T_UINT64  ||
                     token.type == T_BOOLEAN ||
                     token.type == T_NULL) {
                     /* Call user code */
@@ -1427,6 +1497,12 @@ static void json_process_value(lua_State *l, json_parse_t *json,
     case T_STRING:
         lua_pushlstring(l, token->value.string, token->string_len);
         break;;
+    case T_INT64:
+        push_i64(l, token->value.ival);
+        break;;
+    case T_UINT64:
+        push_u64(l, token->value.uval);
+        break;;
     case T_NUMBER:
         lua_pushnumber(l, token->value.number);
         break;;
@@ -1461,7 +1537,6 @@ static int json_decode(lua_State *l)
     }
 
     json.user_callbacks = 0;
-    json.number_as_string = 0;
 
     if (top == 2) {
         if (lua_istable(l, 2) == 0) {
@@ -1480,12 +1555,6 @@ static int json_decode(lua_State *l)
                               !lua_isnil(l, -2) &&
                               !lua_isnil(l, -1);
         lua_pop(l, 5);
-
-        lua_getfield(l, 2, "number_as_string");
-        if (lua_isboolean(l, -1)) {
-            json.number_as_string = lua_toboolean(l, -1);
-        }
-        lua_pop(l, 1);
     }
 
     json.cfg = json_fetch_config(l);
@@ -1544,6 +1613,22 @@ static void luaL_setfuncs (lua_State *l, const luaL_Reg *reg, int nup)
         lua_setfield(l, -(nup + 2), reg->name);
     }
     lua_pop(l, nup);  /* remove upvalues */
+}
+
+static void *luaL_testudata (lua_State *l, int i, const char *tname) {
+  void *p = lua_touserdata(l, i);
+  luaL_checkstack(l, 2, "not enough stack slots");
+  if (p == NULL || !lua_getmetatable(l, i))
+    return NULL;
+  else {
+    int res = 0;
+    luaL_getmetatable(l, tname);
+    res = lua_rawequal(l, -1, -2);
+    lua_pop(l, 2);
+    if (!res)
+      p = NULL;
+  }
+  return p;
 }
 #endif
 
@@ -1671,7 +1756,6 @@ int luaopen_cjson(lua_State *l)
     lua_pushvalue(l, -1);
     lua_setglobal(l, CJSON_MODNAME);
 #endif
-
     /* Return cjson table */
     return 1;
 }

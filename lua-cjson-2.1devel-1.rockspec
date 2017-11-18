@@ -27,7 +27,7 @@ build = {
     type = "builtin",
     modules = {
         cjson = {
-            sources = { "lua_cjson.c", "strbuf.c", "fpconv.c" },
+            sources = { "lua_cjson.c", "strbuf.c", "fpconv.c", "int64.c" },
             defines = {
 -- LuaRocks does not support platform specific configuration for Solaris.
 -- Uncomment the line below on Solaris platforms if required.

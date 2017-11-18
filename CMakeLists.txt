@@ -68,7 +68,7 @@ else()
     set(_lua_module_dir "${_lua_lib_dir}/lua/5.1")
 endif()
 
-add_library(cjson MODULE lua_cjson.c strbuf.c ${FPCONV_SOURCES})
+add_library(cjson MODULE int64.c lua_cjson.c strbuf.c ${FPCONV_SOURCES})
 set_target_properties(cjson PROPERTIES PREFIX "")
 target_link_libraries(cjson ${_MODULE_LINK})
 install(TARGETS cjson DESTINATION "${_lua_module_dir}")
