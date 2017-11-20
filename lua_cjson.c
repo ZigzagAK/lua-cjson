@@ -711,13 +711,13 @@ static void json_append_object(lua_State *l, json_config_t *cfg,
             json_append_string(l, json, -2);
             strbuf_append_char(json, ':');
         } else if (keytype == LUA_TUSERDATA) {
-            void *ud = luaL_testudata(l, -2, "INT64");
+            void *ud = luaL_testudata(l, -2, INT64);
             if (ud) {
                 strbuf_append_char(json, '"');
                 json_append_int64(json, get_i64(ud));
                 strbuf_append_mem(json, "\":", 2);
             } else {
-                ud = luaL_testudata(l, -2, "UINT64");
+                ud = luaL_testudata(l, -2, UINT64);
                 if (ud) {
                     strbuf_append_char(json, '"');
                     json_append_uint64(json, get_u64(ud));
@@ -795,12 +795,12 @@ static void json_append_data(lua_State *l, json_config_t *cfg,
         }
         break;
     case LUA_TUSERDATA: {
-            void *ud = luaL_testudata(l, -1, "INT64");
+            void *ud = luaL_testudata(l, -1, INT64);
             if (ud) {
                 json_append_int64(json, get_i64(ud));
                 break;
             }
-            ud = luaL_testudata(l, -1, "UINT64");
+            ud = luaL_testudata(l, -1, UINT64);
             if (ud) {
                 json_append_uint64(json, get_u64(ud));
                 break;

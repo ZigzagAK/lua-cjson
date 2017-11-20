@@ -14,8 +14,8 @@
 LUA_VERSION =       5.1
 TARGET =            cjson.so
 PREFIX =            /usr/local
-CFLAGS =            -g -Wall -pedantic -fno-inline
-#CFLAGS =            -O3 -Wall -pedantic -DNDEBUG
+#CFLAGS =            -g -Wall -pedantic -fno-inline
+CFLAGS =            -O3 -Wall -pedantic -DNDEBUG
 CJSON_CFLAGS =      -fpic
 CJSON_LDFLAGS =     -shared
 LUA_INCLUDE_DIR ?=   $(PREFIX)/include

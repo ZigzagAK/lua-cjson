@@ -3,6 +3,11 @@
 
 #include <inttypes.h>
 
+
+extern const char *INT64;
+extern const char *UINT64;
+
+
 int
 push_i64(lua_State *L, int64_t v);
 
