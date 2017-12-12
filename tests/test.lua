@@ -87,6 +87,11 @@ end
 local Inf = math.huge;
 local NaN = math.huge * 0;
 
+function check_case(s, opts, name)
+  local j = json.decode(s, opts)
+  return next(j)
+end
+
 local testdata = load_testdata()
 
 function check_callback(n)
@@ -519,7 +524,25 @@ local cjson_tests = {
       true, { true } },
     { "User callback rfc-example2.json",
       check_callback, { "rfc-example2.json" },
-      true, { true } }
+      true, { true } },
+
+    -- Case
+    { "Case lower",
+      check_case, { "{ \"AaBb\": \"HeLlO\" }", { lowercase = true } },
+      true, { "aabb", "HeLlO" } },
+    { "Upper lower",
+      check_case, { "{ \"AaBb\": \"HeLlO\" }", { uppercase = true } },
+      true, { "AABB", "HeLlO" } },
+    { "Case noconv",
+      check_case, { "{ \"AaBb\": \"HeLlO\" }", {} },
+      true, { "AaBb", "HeLlO" } },
+    { "Case lower array",
+      check_case, { "{ \"AaBb\": [ \"HeLlO\" ] }", { lowercase = true } },
+      true, { "aabb", { "HeLlO" } } },
+    { "Case lower array of objects",
+      check_case, { "{ \"AaBb\": [ { \"AaBb\": \"HeLlO\" } ] }", { lowercase = true } },
+      true, { "aabb", { { aabb="HeLlO" } } } },
+
 }
 
 print(("==> Testing Lua CJSON version %s\n"):format(json._VERSION))

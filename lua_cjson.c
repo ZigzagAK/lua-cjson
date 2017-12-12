@@ -46,6 +46,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <strings.h>
+#include <ctype.h>
 
 #include "strbuf.h"
 #include "fpconv.h"
@@ -171,6 +172,7 @@ typedef struct {
     json_config_t *cfg;
     int current_depth;
     int user_callbacks;
+    int (*conv)(int c);
 } json_parse_t;
 
 typedef struct {
@@ -1277,6 +1279,7 @@ static void json_parse_object_context(lua_State *l, json_parse_t *json)
 {
     json_token_t token;
     int saved_sp;
+    char *c, *tag;
 
     /* 3 or 4 slots required:
      * .., table, [callback], key, value */
@@ -1324,7 +1327,22 @@ static void json_parse_object_context(lua_State *l, json_parse_t *json)
         }
 
         /* Push key */
-        lua_pushlstring(l, token.value.string, token.string_len);
+        if (json->conv) {
+            tag = token.string_len < 1024 ? alloca(token.string_len + 1)
+                                          : malloc(token.string_len + 1);
+            if (tag == NULL) {
+                luaL_error(l, "Memory allocation error in CJSON protected call");
+            }
+            strncpy(tag, token.value.string, token.string_len);
+            for (c = tag; c < tag + token.string_len; ++c)
+                *c = (*json->conv)(*c);
+            lua_pushlstring(l, tag, token.string_len);
+            if (token.string_len >= 1024) {
+                free(tag);
+            }
+        } else {
+            lua_pushlstring(l, token.value.string, token.string_len);
+        }
 
         json_next_token(json, &token);
         if (token.type != T_COLON)
@@ -1537,11 +1555,20 @@ static int json_decode(lua_State *l)
     }
 
     json.user_callbacks = 0;
+    json.conv = NULL;
 
     if (top == 2) {
         if (lua_istable(l, 2) == 0) {
             luaL_error(l, "opts argument must be a table with additional options");
         }
+
+        lua_getfield(l, 2, "lowercase");
+        lua_getfield(l, 2, "uppercase");
+
+        json.conv = !lua_isnil(l, -2) && lua_toboolean(l, -2) ? tolower
+            : !lua_isnil(l, -1) && lua_toboolean(l, -1) ? toupper : NULL;
+
+        lua_pop(l, 2);
 
         lua_getfield(l, 2, "obj_beg_cb");
         lua_getfield(l, 2, "obj_end_cb");
@@ -1554,6 +1581,7 @@ static int json_decode(lua_State *l)
                               !lua_isnil(l, -3) &&
                               !lua_isnil(l, -2) &&
                               !lua_isnil(l, -1);
+
         lua_pop(l, 5);
     }
 
