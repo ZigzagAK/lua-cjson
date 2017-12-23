@@ -171,8 +171,9 @@ typedef struct {
     strbuf_t *tmp;    /* Temporary storage for strings */
     json_config_t *cfg;
     int current_depth;
-    int user_callbacks;
+    int callbacks;
     int (*conv)(int c);
+    unsigned char *store;
 } json_parse_t;
 
 typedef struct {
@@ -1120,27 +1121,33 @@ static void json_next_number_token(json_parse_t *json, json_token_t *token)
     if (json->ptr == endptr) {
         json_set_token_error(token, json, "invalid number");
     } else {
-        if (value > 1e+14 - 1) {
-            token->value.ival = strtoll(json->ptr, NULL, 10);
-            if ((errno == ERANGE && (token->value.ival == LLONG_MAX || token->value.ival == 0))
-                       || (errno != 0 && token->value.ival == 0)) {
-                token->value.uval = strtoull(json->ptr, NULL, 10);
-                if ((errno == ERANGE && (token->value.uval == ULLONG_MAX || token->value.uval == 0))
-                           || (errno != 0 && token->value.uval == 0)) {
+        if (!isinf(value)) {
+            errno = 0;
+            if (value > 1e+14 - 1) {
+                token->value.ival = strtoll(json->ptr, NULL, 10);
+                if ((errno == ERANGE && (token->value.ival == LLONG_MAX || token->value.ival == 0))
+                           || (errno != 0 && token->value.ival == 0)) {
+                    errno = 0;
+                    token->value.uval = strtoull(json->ptr, NULL, 10);
+                    if ((errno == ERANGE && (token->value.uval == ULLONG_MAX || token->value.uval == 0))
+                               || (errno != 0 && token->value.uval == 0)) {
+                        token->value.number = value;
+                    } else {
+                        token->type = T_UINT64;
+                    }
+                } else {
+                    token->type = T_INT64;
+                }
+            } else if (value < -1e+14 + 1) {
+                token->value.ival = strtoll(json->ptr, NULL, 10);
+                if ((errno == ERANGE && (token->value.ival + 1 == -LLONG_MAX || token->value.ival == 0))
+                           || (errno != 0 && token->value.ival == 0)) {
                     token->value.number = value;
                 } else {
-                    token->type = T_UINT64;
+                    token->type = T_INT64;
                 }
             } else {
-                token->type = T_INT64;
-            }
-        } else if (value < -1e+14 + 1) {
-            token->value.ival = strtoll(json->ptr, NULL, 10);
-            if ((errno == ERANGE && (token->value.ival + 1 == -LLONG_MAX || token->value.ival == 0))
-                       || (errno != 0 && token->value.ival == 0)) {
                 token->value.number = value;
-            } else {
-                token->type = T_INT64;
             }
         } else {
             token->value.number = value;
@@ -1256,17 +1263,55 @@ static void json_throw_parse_error(lua_State *l, json_parse_t *json,
                exp, found, token->index + 1);
 }
 
-static inline void json_decode_ascend(json_parse_t *json)
+static inline void json_decode_ascend(lua_State *l, json_parse_t *json, const char *tag)
 {
+    if (json->callbacks) {
+        /* User callback */
+        lua_getfield(l, 2, tag);
+        if (lua_isfunction(l, -1)) {
+            lua_pushinteger(l, json->current_depth);
+            if (lua_pcall(l, 1, 0, 0) != 0) {
+                luaL_error(l, lua_tostring(l, -1));
+            }
+        } else {
+            /* Pop nil */
+            lua_pop(l, 1);
+        }
+    }
     json->current_depth--;
 }
 
-static void json_decode_descend(lua_State *l, json_parse_t *json, int slots)
+static void json_decode_descend(lua_State *l, json_parse_t *json, int slots, const char *tag)
 {
+    int sp;
+
     json->current_depth++;
 
     if (json->current_depth <= json->cfg->decode_max_depth &&
         lua_checkstack(l, slots)) {
+        json->store[json->current_depth] = json->store[json->current_depth - 1];
+        if (json->callbacks) {
+            /* User callback */
+            sp = lua_gettop(l);
+            lua_getfield(l, 2, tag);
+            if (lua_isfunction(l, -1)) {
+                if (lua_isstring(l, -2)) {
+                    /* Push object name */
+                    lua_pushstring(l, lua_tostring(l, -2));
+                } else {
+                    /* Root of JSON or object in the array */
+                    lua_pushnil(l);
+                }
+                lua_pushinteger(l, json->current_depth);
+                if (lua_pcall(l, 2, 1, 0) != 0) {
+                    luaL_error(l, lua_tostring(l, -1));
+                }
+                if (lua_isboolean(l, -1)) {
+                    json->store[json->current_depth] = lua_toboolean(l, -1);
+                }
+            }
+            lua_settop(l, sp);
+        }
         return;
     }
 
@@ -1278,32 +1323,15 @@ static void json_decode_descend(lua_State *l, json_parse_t *json, int slots)
 static void json_parse_object_context(lua_State *l, json_parse_t *json)
 {
     json_token_t token;
-    int saved_sp;
+    int sp1, sp2;
     char *c, *tag;
+    int j;
 
     /* 3 or 4 slots required:
      * .., table, [callback], key, value */
-    json_decode_descend(l, json, 3 + json->user_callbacks);
+    json_decode_descend(l, json, 3 + json->callbacks, "begin_object");
 
-    if (json->user_callbacks) {
-        /* User callback */
-        lua_getfield(l, 2, "obj_beg_cb");
-        if (lua_isfunction(l, -1)) {
-            if (lua_isstring(l, -2)) {
-                /* Push object name */
-                lua_pushstring(l, lua_tostring(l, -2));
-            } else {
-                /* Root of JSON or object in the array */
-                lua_pushnil(l);
-            }
-            if (lua_pcall(l, 1, 0, 0) != 0) {
-                luaL_error(l, lua_tostring(l, -1));
-            }
-        } else {
-            /* pop nil */
-            lua_pop(l, 1);
-        }
-    } else {
+    if (json->store[json->current_depth]) {
         lua_newtable(l);
     }
 
@@ -1311,20 +1339,15 @@ static void json_parse_object_context(lua_State *l, json_parse_t *json)
 
     /* Handle empty objects */
     if (token.type == T_OBJ_END) {
-        json_decode_ascend(json);
-        goto callback;
+        json_decode_ascend(l, json, "end_object");
+        return;
     }
 
     while (1) {
         if (token.type != T_STRING)
             json_throw_parse_error(l, json, "object key string", &token);
 
-        saved_sp = lua_gettop(l);
-
-        if (json->user_callbacks) {
-            /* Push value callback */
-            lua_getfield(l, 2, "value_cb");
-        }
+        sp1 = lua_gettop(l);
 
         /* Push key */
         if (json->conv) {
@@ -1352,33 +1375,41 @@ static void json_parse_object_context(lua_State *l, json_parse_t *json)
         json_next_token(json, &token);
         json_process_value(l, json, &token);
 
-        if (json->user_callbacks) {
-            if (lua_isfunction(l, saved_sp + 1)) {
-                lua_settop(l, saved_sp + 3);
-                if (token.type == T_STRING  ||
-                    token.type == T_NUMBER  ||
-                    token.type == T_INT64   ||
-                    token.type == T_UINT64  ||
-                    token.type == T_BOOLEAN ||
-                    token.type == T_NULL) {
-                    /* Call user code */
-                    if (lua_pcall(l, 2, 0, 0) != 0) {
+        if (json->callbacks) {
+            switch (token.type) {
+                case T_OBJ_BEGIN:
+                case T_ARR_BEGIN:
+                    if (!json->store[json->current_depth + 1])
+                        break;
+            default:
+                sp2 = lua_gettop(l);
+                lua_getfield(l, 2, "field");
+                if (lua_isfunction(l, -1)) {
+                    for (j = sp1 + 1; j <= sp2; ++j) {
+                        lua_pushvalue(l, j);
+                    }
+                    /* Push depth */
+                    lua_pushinteger(l, json->current_depth);
+                    if (lua_pcall(l, lua_gettop(l) - sp2 - 1, 0, 0) != 0) {
                         luaL_error(l, lua_tostring(l, -1));
                     }
                 }
+                lua_settop(l, sp2);
             }
-            /* Cleanup stack */
-            lua_settop(l, saved_sp);
-        } else {
+        }
+
+        if (json->store[json->current_depth]) {
             /* Set key = value */
             lua_rawset(l, -3);
+        } else {
+            lua_settop(l, sp1);
         }
 
         json_next_token(json, &token);
 
         if (token.type == T_OBJ_END) {
-            json_decode_ascend(json);
-            goto callback;
+            json_decode_ascend(l, json, "end_object");
+            return;
         }
 
         if (token.type != T_COMMA)
@@ -1386,53 +1417,20 @@ static void json_parse_object_context(lua_State *l, json_parse_t *json)
 
         json_next_token(json, &token);
     }
-
-callback:
-
-    if (json->user_callbacks) {
-        /* user callback */
-        lua_getfield(l, 2, "obj_end_cb");
-        if (lua_isfunction(l, -1)) {
-            if (lua_pcall(l, 0, 0, 0) != 0) {
-                luaL_error(l, lua_tostring(l, -1));
-            }
-        } else {
-            /* pop nil */
-            lua_pop(l, 1);
-        }
-    }
 }
 
 /* Handle the array context */
 static void json_parse_array_context(lua_State *l, json_parse_t *json)
 {
     json_token_t token;
-    int i;
-    int saved_sp;
+    int i, j;
+    int sp1, sp2;
 
     /* 2 slots required:
      * .., table, [callback, key=nil], value */
-    json_decode_descend(l, json, 2 + json->user_callbacks * 2);
+    json_decode_descend(l, json, 2 + json->callbacks * 2, "begin_array");
 
-    if (json->user_callbacks) {
-        /* User callback */
-        lua_getfield(l, 2, "arr_beg_cb");
-        if (lua_isfunction(l, -1)) {
-            if (lua_isstring(l, -2)) {
-                /* Push object name */
-                lua_pushstring(l, lua_tostring(l, -2));
-            } else {
-                /* Root of JSON or array in the array */
-                lua_pushnil(l);
-            }
-            if (lua_pcall(l, 1, 0, 0) != 0) {
-                luaL_error(l, lua_tostring(l, -1));
-            }
-        } else {
-            /* pop nil */
-            lua_pop(l, 1);
-        }
-    } else {
+    if (json->store[json->current_depth]) {
         lua_newtable(l);
     }
 
@@ -1440,70 +1438,62 @@ static void json_parse_array_context(lua_State *l, json_parse_t *json)
 
     /* Handle empty arrays */
     if (token.type == T_ARR_END) {
-        json_decode_ascend(json);
-        goto callback;
+        json_decode_ascend(l, json, "end_array");
+        return;
     }
 
     for (i = 1; ; i++) {
-        saved_sp = lua_gettop(l);
+        sp1 = lua_gettop(l);
 
-        if (json->user_callbacks) {
-            /* Push value callback */
-
-            lua_getfield(l, 2, "value_cb");
-            lua_pushnil(l);
-        }
+        /* Fake key */
+        lua_pushnil(l);
 
         json_process_value(l, json, &token);
 
-        if (json->user_callbacks) {
-            if (lua_isfunction(l, saved_sp + 1)) {
-                lua_settop(l, saved_sp + 3);
-                if (token.type == T_STRING  ||
-                    token.type == T_NUMBER  ||
-                    token.type == T_INT64   ||
-                    token.type == T_UINT64  ||
-                    token.type == T_BOOLEAN ||
-                    token.type == T_NULL) {
-                    /* Call user code */
-                    if (lua_pcall(l, 2, 0, 0) != 0) {
+        if (json->callbacks) {
+            switch (token.type) {
+                case T_OBJ_BEGIN:
+                case T_ARR_BEGIN:
+                    if (!json->store[json->current_depth + 1])
+                        break;
+            default:
+                sp2 = lua_gettop(l);
+                lua_getfield(l, 2, "field");
+                if (lua_isfunction(l, -1)) {
+                    for (j = sp1 + 1; j <= sp2; ++j) {
+                        lua_pushvalue(l, j);
+                    }
+                    /* Push depth */
+                    lua_pushinteger(l, json->current_depth);
+                    if (lua_pcall(l, lua_gettop(l) - sp2 - 1, 0, 0) != 0) {
                         luaL_error(l, lua_tostring(l, -1));
                     }
                 }
+                lua_settop(l, sp2);
             }
-            /* Cleanup stack */
-            lua_settop(l, saved_sp);
-        } else {
+        }
+
+        /* Remove fake key */
+        lua_remove(l, sp1 + 1);
+
+        if (json->store[json->current_depth]) {
             /* arr[i] = value */
             lua_rawseti(l, -2, i);
+        } else {
+            lua_settop(l, sp1);
         }
 
         json_next_token(json, &token);
 
         if (token.type == T_ARR_END) {
-            json_decode_ascend(json);
-            goto callback;
+            json_decode_ascend(l, json, "end_array");
+            return;
         }
 
         if (token.type != T_COMMA)
             json_throw_parse_error(l, json, "comma or array end", &token);
 
         json_next_token(json, &token);
-    }
-
-callback:
-
-    if (json->user_callbacks) {
-        /* User callback */
-        lua_getfield(l, 2, "arr_end_cb");
-        if (lua_isfunction(l, -1)) {
-            if (lua_pcall(l, 0, 0, 0) != 0) {
-                luaL_error(l, lua_tostring(l, -1));
-            }
-        } else {
-            /* pop nil */
-            lua_pop(l, 1);
-        }
     }
 }
 
@@ -1554,7 +1544,7 @@ static int json_decode(lua_State *l)
         luaL_error(l, "expected 1 or 2 arguments");
     }
 
-    json.user_callbacks = 0;
+    json.callbacks = 0;
     json.conv = NULL;
 
     if (top == 2) {
@@ -1570,17 +1560,17 @@ static int json_decode(lua_State *l)
 
         lua_pop(l, 2);
 
-        lua_getfield(l, 2, "obj_beg_cb");
-        lua_getfield(l, 2, "obj_end_cb");
-        lua_getfield(l, 2, "arr_beg_cb");
-        lua_getfield(l, 2, "arr_end_cb");
-        lua_getfield(l, 2, "value_cb");
+        lua_getfield(l, 2, "begin_object");
+        lua_getfield(l, 2, "end_object");
+        lua_getfield(l, 2, "begin_array");
+        lua_getfield(l, 2, "end_array");
+        lua_getfield(l, 2, "field");
 
-        json.user_callbacks = !lua_isnil(l, -5) &&
-                              !lua_isnil(l, -4) &&
-                              !lua_isnil(l, -3) &&
-                              !lua_isnil(l, -2) &&
-                              !lua_isnil(l, -1);
+        json.callbacks = !lua_isnil(l, -5) ||
+                         !lua_isnil(l, -4) ||
+                         !lua_isnil(l, -3) ||
+                         !lua_isnil(l, -2) ||
+                         !lua_isnil(l, -1);
 
         lua_pop(l, 5);
     }
@@ -1589,6 +1579,13 @@ static int json_decode(lua_State *l)
     json.data = luaL_checklstring(l, 1, &json_len);
     json.current_depth = 0;
     json.ptr = json.data;
+    json.store = calloc(json.cfg->decode_max_depth + 1, 1);
+    if (json.store == NULL) {
+        luaL_error(l, "no memory");
+    }
+    if (!json.callbacks) {
+        json.store[0] = 1;
+    }
 
     /* Detect Unicode other than UTF-8 (see RFC 4627, Sec 3)
      *

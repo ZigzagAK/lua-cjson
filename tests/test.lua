@@ -106,7 +106,7 @@ function check_callback(n)
   local p
 
   local opts = {
-    obj_beg_cb = function(name)
+    begin_object = function(name)
       p = {}
       if name then
         j[name] = p
@@ -121,11 +121,11 @@ function check_callback(n)
       j = p
     end,
 
-    obj_end_cb = function()
+    end_object = function()
       j = table.remove(depth)
     end,
 
-    arr_beg_cb = function(name)
+    begin_array = function(name)
       p = {}
       if name then
         j[name] = p
@@ -140,15 +140,111 @@ function check_callback(n)
       j = p
     end,
 
-    arr_end_cb = function()
+    end_array = function()
       j = table.remove(depth)
     end,
 
-    value_cb = function(name, value)
+    field = function(name, value)
       if name then
         j[name] = value
       else
         table.insert(j, value)
+      end
+    end
+  }
+
+  local compare
+  compare = function(tab, tab_orig)
+    for k,v in pairs(tab_orig)
+    do
+      if tab[k] == nil then
+        print("tab[" .. k .. "]=nil")
+        return false
+      end
+      if type(v) == "table" and type(tab[k]) == "table" then
+        if not compare(tab[k], v) then
+          return false
+        end
+      elseif v ~= tab[k] then
+        print(v .. "~=" .. tab[k])
+        return false
+      end
+    end
+    return true
+  end
+
+  json.decode(l, opts)
+
+  local j_orig = json.decode(l)
+
+  if compare(j, j_orig) and compare(j_orig, j) then
+    return true
+  else
+    print("Fail")
+    print(json.encode(j))
+    print("==============")
+    print(json.encode(j_orig))
+  end
+
+  return false
+end
+
+function check_callback_arr(n)
+  local f, err = io.open(n, "r")
+
+  local l = f:read("*a")
+
+  f:close()
+
+  local j
+  local depth = {}
+  local p
+
+  local opts = {
+    begin_object = function(name, level)
+      p = {}
+      if name then
+        j[name] = p
+      else
+        if not j then
+          j = p
+        end
+      end
+      table.insert(depth, j)
+      j = p
+      return level == 2 and true or nil
+    end,
+
+    end_object = function()
+      j = table.remove(depth)
+    end,
+
+    begin_array = function(name)
+      p = {}
+      if name then
+        j[name] = p
+      else
+        if j then
+          table.insert(j, p)
+        else
+          j = p
+        end
+      end
+      table.insert(depth, j)
+      j = p
+    end,
+
+    end_array = function()
+      j = table.remove(depth)
+    end,
+
+    field = function(name, value, level)
+      if level == 1 then
+        if name then
+          j[name] = value
+        else
+          table.insert(j, value)
+        end
       end
     end
   }
@@ -525,6 +621,12 @@ local cjson_tests = {
     { "User callback rfc-example2.json",
       check_callback, { "rfc-example2.json" },
       true, { true } },
+    { "User callback_arr rfc-example2.json",
+      check_callback_arr, { "rfc-example2.json" },
+      true, { true } },
+    { "User callback_arr rfc-example3.json",
+      check_callback_arr, { "rfc-example3.json" },
+      true, { true } },
 
     -- Case
     { "Case lower",
@@ -541,8 +643,7 @@ local cjson_tests = {
       true, { "aabb", { "HeLlO" } } },
     { "Case lower array of objects",
       check_case, { "{ \"AaBb\": [ { \"AaBb\": \"HeLlO\" } ] }", { lowercase = true } },
-      true, { "aabb", { { aabb="HeLlO" } } } },
-
+      true, { "aabb", { { aabb="HeLlO" } } } }
 }
 
 print(("==> Testing Lua CJSON version %s\n"):format(json._VERSION))
