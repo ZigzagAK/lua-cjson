@@ -13,15 +13,19 @@
 ##### Build defaults #####
 LUA_VERSION =       5.1
 TARGET =            cjson.so
-PREFIX =            /usr/local
-#CFLAGS =            -g -Wall -pedantic -fno-inline
-CFLAGS =            -O3 -Wall -pedantic -DNDEBUG
-CJSON_CFLAGS =      -fpic
-CJSON_LDFLAGS =     -shared
-LUA_INCLUDE_DIR ?=   $(PREFIX)/include
-LUA_CMODULE_DIR ?=   $(PREFIX)/lib/lua/$(LUA_VERSION)
-LUA_MODULE_DIR ?=    $(PREFIX)/share/lua/$(LUA_VERSION)
-LUA_BIN_DIR ?=       $(PREFIX)/bin
+PREFIX ?=           /usr/local
+CFLAGS +=           -g -O3 -Wall -pedantic -DNDEBUG
+ifdef WITH_INT64
+INT64_DIR ?=        $(HOME)/lua_int64
+CFLAGS +=           -g -O3 -Wall -pedantic -DNDEBUG -I$(WITH_INT64) -D_WITH_INT64=1
+LDFLAGS +=          -L$(WITH_INT64) -llua_int64
+endif
+CJSON_CFLAGS =      $(CFLAGS) -fpic
+CJSON_LDFLAGS =     $(LDFLAGS) -shared 
+LUA_INCLUDE_DIR ?=  $(PREFIX)/include
+LUA_CMODULE_DIR ?=  $(PREFIX)/lib/lua/$(LUA_VERSION)
+LUA_MODULE_DIR ?=   $(PREFIX)/share/lua/$(LUA_VERSION)
+LUA_BIN_DIR ?=      $(PREFIX)/bin
 
 ##### Platform overrides #####
 ##
@@ -80,7 +84,7 @@ EXECPERM =          755
 ASCIIDOC =          asciidoc
 
 BUILD_CFLAGS =      -I$(LUA_INCLUDE_DIR) $(CJSON_CFLAGS)
-OBJS =              int64.o lua_cjson.o strbuf.o $(FPCONV_OBJS)
+OBJS =              lua_cjson.o strbuf.o $(FPCONV_OBJS)
 
 .PHONY: all clean install install-extra doc
 
