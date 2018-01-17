@@ -1605,13 +1605,8 @@ static int json_decode(lua_State *l)
     json.data = luaL_checklstring(l, 1, &json_len);
     json.current_depth = 0;
     json.ptr = json.data;
-    json.store = calloc(json.cfg->decode_max_depth + 1, 1);
-    if (json.store == NULL) {
-        luaL_error(l, "no memory");
-    }
-    if (!json.callbacks) {
-        json.store[0] = 1;
-    }
+    json.store = alloca(json.cfg->decode_max_depth + 1);
+    json.store[0] = !json.callbacks ? 1 : 0;
 
     /* Detect Unicode other than UTF-8 (see RFC 4627, Sec 3)
      *
