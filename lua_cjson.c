@@ -1641,43 +1641,6 @@ static int json_decode(lua_State *l)
 
 /* ===== INITIALISATION ===== */
 
-#if !defined(luaL_newlibtable) \
-    && (!defined(LUA_VERSION_NUM) || LUA_VERSION_NUM < 502)
-/* Compatibility for Lua 5.1 and older LuaJIT.
- *
- * luaL_setfuncs() is used to create a module table where the functions have
- * json_config_t as their first upvalue. Code borrowed from Lua 5.2 source. */
-static void luaL_setfuncs (lua_State *l, const luaL_Reg *reg, int nup)
-{
-    int i;
-
-    luaL_checkstack(l, nup, "too many upvalues");
-    for (; reg->name != NULL; reg++) {  /* fill the table with given functions */
-        for (i = 0; i < nup; i++)  /* copy upvalues to the top */
-            lua_pushvalue(l, -nup);
-        lua_pushcclosure(l, reg->func, nup);  /* closure with those upvalues */
-        lua_setfield(l, -(nup + 2), reg->name);
-    }
-    lua_pop(l, nup);  /* remove upvalues */
-}
-
-static void *luaL_testudata (lua_State *l, int i, const char *tname) {
-  void *p = lua_touserdata(l, i);
-  luaL_checkstack(l, 2, "not enough stack slots");
-  if (p == NULL || !lua_getmetatable(l, i))
-    return NULL;
-  else {
-    int res = 0;
-    luaL_getmetatable(l, tname);
-    res = lua_rawequal(l, -1, -2);
-    lua_pop(l, 2);
-    if (!res)
-      p = NULL;
-  }
-  return p;
-}
-#endif
-
 /* Call target function in protected mode with all supplied args.
  * Assumes target function only returns a single non-nil value.
  * Convert and return thrown errors as: nil, "error message" */
